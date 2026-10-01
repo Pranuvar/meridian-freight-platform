@@ -1,0 +1,15 @@
+services:
+  tms-db:
+    image: postgres:16
+    container_name: tms-db
+    environment:
+      POSTGRES_USER: meridian
+      POSTGRES_PASSWORD: meridian_pw
+      POSTGRES_DB: tms
+    ports:
+      - "5433:5432"
+    volumes:
+      - tms_data:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql
+volumes:
+  tms_data:

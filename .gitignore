@@ -1,0 +1,10 @@
+*.pbix
+*.pyc
+.env
+.venv-airflow/
+.venv/
+__pycache__/
+data/
+metastore_db/
+orchestration/airflow_home/
+spark-warehouse/
