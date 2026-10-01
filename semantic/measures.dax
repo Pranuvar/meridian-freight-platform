@@ -1,0 +1,55 @@
+// Measures table. Every measure excludes cancelled shipments unless stated.
+Shipments = CALCULATE ( COUNTROWS ( Shipments ), Shipments[Status] <> "CANCELLED" )
+Delivered Shipments = CALCULATE ( COUNTROWS ( Shipments ), Shipments[Is Delivered] = TRUE (), Shipments[Status] <> "CANCELLED" )
+On-Time Shipments = CALCULATE ( COUNTROWS ( Shipments ), Shipments[Is On Time] = TRUE (), Shipments[Status] <> "CANCELLED" )
+On-Time Delivery % = DIVIDE ( [On-Time Shipments], [Delivered Shipments] )
+Late Shipments = [Delivered Shipments] - [On-Time Shipments]
+Average Delay (late, hours) = CALCULATE ( AVERAGE ( Shipments[Delay Hours] ), Shipments[Is On Time] = FALSE (), Shipments[Is Delivered] = TRUE (), Shipments[Status] <> "CANCELLED" )
+Average Transit Hours = CALCULATE ( AVERAGE ( Shipments[Transit Hours] ), Shipments[Status] <> "CANCELLED" )
+Revenue Net (₹) = CALCULATE ( SUM ( Shipments[Revenue Total Inr] ), Shipments[Status] <> "CANCELLED" )
+Carrier Cost (₹) = CALCULATE ( SUM ( Shipments[Carrier Cost Invoiced Inr] ), Shipments[Status] <> "CANCELLED" )
+Gross Margin (₹) = CALCULATE ( SUM ( Shipments[Margin Inr] ), Shipments[Status] <> "CANCELLED" )
+Revenue of Invoiced Shipments (₹) = CALCULATE ( SUM ( Shipments[Revenue Total Inr] ), NOT ISBLANK ( Shipments[Carrier Cost Invoiced Inr] ), Shipments[Status] <> "CANCELLED" )
+Gross Margin % = DIVIDE ( [Gross Margin (₹)], [Revenue of Invoiced Shipments (₹)] )
+Margin Coverage % = DIVIDE ( [Revenue of Invoiced Shipments (₹)], [Revenue Net (₹)] )
+Quote Variance (₹) = CALCULATE ( SUM ( Shipments[Quote Variance Inr] ), Shipments[Status] <> "CANCELLED" )
+Overbilled Shipments = CALCULATE ( COUNTROWS ( Shipments ), Shipments[Is Overbilled] = TRUE (), Shipments[Status] <> "CANCELLED" )
+Overbilled Shipments % = DIVIDE ( [Overbilled Shipments], CALCULATE ( COUNTROWS ( Shipments ), NOT ISBLANK ( Shipments[Is Overbilled] ), Shipments[Status] <> "CANCELLED" ) )
+Overbilled Excess (₹) = CALCULATE ( [Quote Variance (₹)], Shipments[Is Overbilled] = TRUE () )
+Claim Rate % = DIVIDE ( CALCULATE ( COUNTROWS ( Shipments ), Shipments[Claim Count] > 0, Shipments[Status] <> "CANCELLED" ), [Delivered Shipments] )
+Claim Amount (₹) = CALCULATE ( SUM ( Shipments[Claim Amount Inr] ), Shipments[Status] <> "CANCELLED" )
+Delivery Confirmation Gap % = DIVIDE ( CALCULATE ( COUNTROWS ( Shipments ), Shipments[Status Delivered No Scan] = TRUE () ), CALCULATE ( COUNTROWS ( Shipments ), Shipments[Status] = "DELIVERED" ) )
+Delivered Without Scan = CALCULATE ( COUNTROWS ( Shipments ), Shipments[Status Delivered No Scan] = TRUE () )
+Late-Arriving Scan % = DIVIDE ( CALCULATE ( COUNTROWS ( 'Tracking Events' ), 'Tracking Events'[Is Late Arrival] = TRUE () ), COUNTROWS ( 'Tracking Events' ) )
+Hours Since Previous Scan = AVERAGE ( 'Tracking Events'[Hours Since Prev Scan] )
+
+// Date roles: the Date table relates to Shipments by BOOKED date (active); the others are switched on per measure.
+Shipments Promised = CALCULATE ( [Shipments], USERELATIONSHIP ( Shipments[Promised Date Key], 'Date'[Date Key] ) )
+Shipments Picked Up = CALCULATE ( [Shipments], USERELATIONSHIP ( Shipments[Pickup Date Key], 'Date'[Date Key] ) )
+Shipments Delivered = CALCULATE ( [Delivered Shipments], USERELATIONSHIP ( Shipments[Delivered Date Key], 'Date'[Date Key] ) )
+On-Time % by Delivery Date = CALCULATE ( [On-Time Delivery %], USERELATIONSHIP ( Shipments[Delivered Date Key], 'Date'[Date Key] ) )
+
+// Time intelligence (needs the marked Date table).
+Revenue Previous Month (₹) = CALCULATE ( [Revenue Net (₹)], DATEADD ( 'Date'[Date], -1, MONTH ) )
+Revenue MoM % = DIVIDE ( [Revenue Net (₹)] - [Revenue Previous Month (₹)], [Revenue Previous Month (₹)] )
+Revenue Same Period Last Year (₹) = CALCULATE ( [Revenue Net (₹)], SAMEPERIODLASTYEAR ( 'Date'[Date] ) )
+Revenue YoY % = DIVIDE ( [Revenue Net (₹)] - [Revenue Same Period Last Year (₹)], [Revenue Same Period Last Year (₹)] )
+Revenue YTD (₹) = TOTALYTD ( [Revenue Net (₹)], 'Date'[Date] )
+Revenue Fiscal YTD (₹) = TOTALYTD ( [Revenue Net (₹)], 'Date'[Date], "31/03" )
+Revenue 3-Month Rolling Avg (₹) = AVERAGEX ( DATESINPERIOD ( 'Date'[Date], MAX ( 'Date'[Date] ), -3, MONTH ), CALCULATE ( [Revenue Net (₹)] ) )
+On-Time % Previous Month = CALCULATE ( [On-Time Delivery %], DATEADD ( 'Date'[Date], -1, MONTH ) )
+On-Time % Change (pts) = [On-Time Delivery %] - [On-Time % Previous Month]
+
+// Ranking, contribution, status.
+Carrier Rank (On-Time) = RANKX ( ALL ( Carrier[Carrier Name] ), [On-Time Delivery %], , DESC, DENSE )
+Revenue Contribution % = DIVIDE ( [Revenue Net (₹)], CALCULATE ( [Revenue Net (₹)], REMOVEFILTERS ( Carrier ) ) )
+On-Time Status = SWITCH ( TRUE (), ISBLANK ( [On-Time Delivery %] ), BLANK (), [On-Time Delivery %] >= 0.9, "On target", [On-Time Delivery %] >= 0.8, "Watch", "Action needed" )
+
+// Reads "now" from the data, not TODAY(): the simulated business ends on 7 June 2026.
+Past Promise Undelivered =
+VAR k = MAX ( 'Data Status'[Latest Event Date Key] )
+VAR AsOf = DATE ( INT ( k / 10000 ), MOD ( INT ( k / 100 ), 100 ), MOD ( k, 100 ) ) + 1
+RETURN CALCULATE ( COUNTROWS ( Shipments ), Shipments[Is Delivered] = FALSE (), Shipments[Status] IN { "BOOKED", "IN_TRANSIT" }, Shipments[Promised Delivery At] < AsOf )
+
+// Row-level security role "Regional Manager", filter on Origin:
+// CONTAINS ( Security, Security[Email], USERPRINCIPALNAME (), Security[Region], Origin[Region] )
