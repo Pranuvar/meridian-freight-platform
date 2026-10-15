@@ -1,0 +1,103 @@
+# databricks.yml: one bundle = the job, its notebooks and its per-environment settings, deployed from ONE codebase.
+bundle:
+  name: meridian_freight
+
+# Variables: values that differ per environment. Each target below can override them.
+variables:
+  max_retries:
+    description: Automatic retries for the processing tasks
+    default: 2
+  schedule_status:
+    description: PAUSED or UNPAUSED
+    default: PAUSED
+
+targets:
+  dev:
+    mode: development            # names get a "[dev <you>]" prefix and schedules are forced to paused: safe to experiment
+    default: true
+    workspace:
+      host: https://dbc-8a27aa53-bd8a.cloud.databricks.com
+    variables:
+      max_retries: 0             # fail fast while developing
+  prod:
+    workspace:
+      host: https://dbc-8a27aa53-bd8a.cloud.databricks.com
+      root_path: /Workspace/Users/praneethvarmaraju3@gmail.com/.bundle/${bundle.name}/prod
+    variables:
+      max_retries: 2             # production tolerates transient failures
+
+resources:
+  jobs:
+    meridian_daily:
+      name: meridian_daily_${bundle.target}
+      parameters:                # job parameters: the failure drills, both off by default
+        - name: fail_at
+          default: none
+        - name: fail_once_at
+          default: none
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?"
+        timezone_id: Europe/Dublin
+        pause_status: ${var.schedule_status}
+      tasks:
+        - task_key: check_landing
+          notebook_task:
+            notebook_path: ./src/05_pipeline.py
+            base_parameters: {step: check_landing, run_id: "{{job.run_id}}"}
+        - task_key: bronze
+          depends_on: [{task_key: check_landing}]
+          max_retries: ${var.max_retries}
+          min_retry_interval_millis: 60000
+          notebook_task:
+            notebook_path: ./src/05_pipeline.py
+            base_parameters: {step: bronze, run_id: "{{job.run_id}}"}
+        - task_key: silver_tms
+          depends_on: [{task_key: bronze}]
+          max_retries: ${var.max_retries}
+          min_retry_interval_millis: 60000
+          notebook_task:
+            notebook_path: ./src/05_pipeline.py
+            base_parameters: {step: silver_tms, run_id: "{{job.run_id}}"}
+        - task_key: silver_scans
+          depends_on: [{task_key: silver_tms}]
+          max_retries: ${var.max_retries}
+          min_retry_interval_millis: 60000
+          notebook_task:
+            notebook_path: ./src/05_pipeline.py
+            base_parameters: {step: silver_scans, run_id: "{{job.run_id}}"}
+        - task_key: silver_ref_invoices
+          depends_on: [{task_key: silver_scans}]
+          max_retries: ${var.max_retries}
+          min_retry_interval_millis: 60000
+          notebook_task:
+            notebook_path: ./src/05_pipeline.py
+            base_parameters: {step: silver_ref_invoices, run_id: "{{job.run_id}}"}
+        - task_key: gold
+          depends_on: [{task_key: silver_ref_invoices}]
+          max_retries: ${var.max_retries}
+          min_retry_interval_millis: 60000
+          notebook_task:
+            notebook_path: ./src/05_pipeline.py
+            base_parameters: {step: gold, run_id: "{{job.run_id}}"}
+        - task_key: reconcile
+          depends_on: [{task_key: gold}]
+          notebook_task:
+            notebook_path: ./src/05_pipeline.py
+            base_parameters: {step: reconcile, run_id: "{{job.run_id}}"}
+        - task_key: gate                       # If/else: reads the value the reconcile task stored
+          depends_on: [{task_key: reconcile}]
+          condition_task:
+            op: EQUAL_TO
+            left: "{{tasks.reconcile.values.passed}}"
+            right: "true"
+        - task_key: publish
+          depends_on: [{task_key: gate, outcome: "true"}]
+          max_retries: 1
+          notebook_task:
+            notebook_path: ./src/05_pipeline.py
+            base_parameters: {step: publish, run_id: "{{job.run_id}}"}
+        - task_key: blocked
+          depends_on: [{task_key: gate, outcome: "false"}]
+          notebook_task:
+            notebook_path: ./src/05_pipeline.py
+            base_parameters: {step: blocked, run_id: "{{job.run_id}}"}
